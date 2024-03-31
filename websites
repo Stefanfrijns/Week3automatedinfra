@@ -1,0 +1,100 @@
+---
+- name: Install Docker and Deploy Containers
+  hosts: test
+  vars:
+    db_volume: mariadb
+    wordpress: wordpress
+    joomla: joomla
+    httpd: httpd
+  vars_prompt:
+    - name: specific_website
+      prompt: "Enter the specific website to install (wordpress, joomla, httpd):"
+      private: no
+  become: yes
+
+  tasks:
+    - name: Install pre-requisite packages
+      ansible.builtin.yum:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: latest
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Add Docker CE repo
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Install Docker
+      ansible.builtin.yum:
+        name: docker
+        state: latest
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Start and enable the Docker daemon
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Convert old images to new runtime
+      ansible.builtin.shell:
+        cmd: "grep -rl 'docker-runc' /var/lib/docker/containers/ | xargs sed -i 's/docker-runc/runc/g'"
+      changed_when: false
+      failed_when: false
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Start Docker service
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Deploy MariaDB server
+      ansible.builtin.docker_container:
+        image: mariadb
+        name: mariadb
+        volumes:
+          - "{{db_volume}}:/var/lib/mysql"
+        env:
+          MYSQL_ROOT_PASSWORD: somerootpassword
+          MYSQL_PASSWORD: somemysqlpassword
+          MYSQL_DATABASE: db
+          MYSQL_USER: mysqluser
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Deploy Website in Docker
+      ansible.builtin.docker_container:
+        image: "{{ specific_website }}"
+        name: "{{ specific_website }}"
+        restart_policy: always
+        ports:
+          - "80:80"
+        links:
+          - "{{db_volume}}:/var/lib/mysql"
+        volumes:
+          - "{{ specific_website }}:/var/www/html"
+        env:
+          MYSQL_PASSWORD: somemysqlpassword
+          MYSQL_DATABASE: db
+          MYSQL_USER: mysqluser
+          MYSQL_HOST: mariadb
+      when: specific_website in ['wordpress', 'joomla']
+
+    - name: Install httpd (Apache)
+      ansible.builtin.yum:
+        name: httpd
+        state: latest
+      when: specific_website == 'httpd'
+
+    - name: Start and enable httpd (Apache) service
+      ansible.builtin.service:
+        name: httpd
+        state: started
+        enabled: yes
+      when: specific_website == 'httpd'
